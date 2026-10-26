@@ -2,6 +2,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Package visibility (Android 11+, target 36): without this,
+         getLaunchIntentForPackage() returns null even when the app
+         IS installed, and Open RubyTouch / Open Launcher wrongly
+         report "not installed". Package names rechecked 2026-10-26
+         against the real APKs: RubyTouch = in.aevora.ruby
+         (RubyTouch-1.4.1 APK, launchable in.aevora.ruby.RubyActivity),
+         Kiwi Launcher = net.kiwi.launcher (lw-kizii/launcher). -->
+    <queries>
+        <package android:name="in.aevora.ruby" />
+        <package android:name="net.kiwi.launcher" />
+        <package android:name="com.touchfoo.swordigo" />
+    </queries>
     <application
         android:label="Aevora Exporter"
         android:icon="@mipmap/ic_launcher"

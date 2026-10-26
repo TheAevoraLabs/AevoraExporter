@@ -120,12 +120,15 @@ public class MainActivity extends Activity {
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.VERTICAL);
 
-        // Top bar, fixed
+        // Top bar, fixed. Status-bar inset on top: on Android 16 the
+        // activity draws edge-to-edge, so without this the system
+        // status bar overlaps the top bar, and the first panel text
+        // (notably the About heading) collides with it.
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.setBackgroundColor(PURPLE);
-        top.setPadding(dp(8), dp(8), dp(8), dp(8));
+        top.setPadding(dp(8), statusBarHeight() + dp(8), dp(8), dp(8));
         Button menu = new Button(this);
         menu.setText("\u2630");
         menu.setTextSize(20);
@@ -220,7 +223,7 @@ public class MainActivity extends Activity {
         drawer = new LinearLayout(this);
         drawer.setOrientation(LinearLayout.VERTICAL);
         drawer.setBackgroundColor(CARD);
-        drawer.setPadding(dp(16), dp(16), dp(16), dp(16));
+        drawer.setPadding(dp(16), statusBarHeight() + dp(16), dp(16), dp(16));
         drawer.setVisibility(View.GONE);
         drawer.setElevation(dp(8));
         FrameLayout.LayoutParams dp2 = new FrameLayout.LayoutParams(
@@ -440,7 +443,11 @@ public class MainActivity extends Activity {
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(16), dp(16), dp(16), dp(16));
         scroll.addView(col);
-        col.addView(cardTitle("About Aevora Exporter"));
+        // Title inside a card (not bare at the panel top): the bare
+        // heading sat flush under the top bar and read as overlapping
+        // it. Inside a card it has its own padding and margin.
+        LinearLayout aboutCard = card();
+        aboutCard.addView(cardTitle("About Aevora Exporter"));
         TextView about = new TextView(this);
         about.setText("Aevora Exporter v9\n"
                 + "Template: Kiwi Launcher 9.0\n\n"
@@ -462,7 +469,8 @@ public class MainActivity extends Activity {
                 + "installed, exactly like the launcher. Each exported "
                 + "APK gets its own saves, not the launcher's.");
         about.setTextColor(ON_SURFACE);
-        col.addView(about);
+        aboutCard.addView(about);
+        col.addView(aboutCard);
         Button check = fullButton("Check for updates", PURPLE, 0xFFFFFFFF);
         check.setOnClickListener(v -> checkUpdate());
         col.addView(check);
@@ -841,9 +849,28 @@ public class MainActivity extends Activity {
     private void openApp(String pkg, String label) {
         Intent launch = getPackageManager().getLaunchIntentForPackage(pkg);
         if (launch == null) {
-            Toast.makeText(this, label + " is not installed.",
-                    Toast.LENGTH_SHORT).show();
-            setStage(label + " is not installed on this phone.", 0);
+            // Fallback: explicit launcher activity. RubyTouch's real
+            // launcher is in.aevora.ruby.RubyActivity (verified from
+            // the 1.4.1 APK); Kiwi's is net.kiwi.launcher.MainActivity.
+            String activity = pkg.equals("in.aevora.ruby")
+                    ? "in.aevora.ruby.RubyActivity"
+                    : pkg + ".MainActivity";
+            try {
+                Intent explicit = new Intent();
+                explicit.setClassName(pkg, activity);
+                explicit.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                // Probe: if the package is not there at all, this
+                // throws and we fall through to the honest message.
+                getPackageManager().getApplicationInfo(pkg, 0);
+                closeDrawer();
+                startActivity(explicit);
+                return;
+            } catch (Exception ignored) {
+                // fall through to the not-installed message below
+            }
+            Toast.makeText(this, label + " is not installed (" + pkg + ").",
+                    Toast.LENGTH_LONG).show();
+            setStage(label + " is not installed (" + pkg + ").", 0);
             return;
         }
         closeDrawer();
@@ -929,5 +956,11 @@ public class MainActivity extends Activity {
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
+    }
+
+    /** System status-bar height in px, 0 if the device has none. */
+    private int statusBarHeight() {
+        int id = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        return id > 0 ? getResources().getDimensionPixelSize(id) : 0;
     }
 }
