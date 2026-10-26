@@ -120,6 +120,47 @@ downgrades SDK 37 -> 36 because platform android-37 is not installed
 in the sandbox SDKs. On a normal machine, point `settings.gradle` at
 `google()` / `mavenCentral()`, drop the JDK pin, and keep SDK 37.
 
+## Version rules (2026-10-26)
+- **Exporter app: v9.** Its version always matches the Kiwi template
+  in its assets (Launcher 9.0 / versionCode 90). When the template pin
+  moves, bump the exporter version together with it.
+- **Exported APKs: `<mod version>_kiwi9`.** The result carries the
+  mod's own version, not Kiwi's, with the template major as a suffix
+  — e.g. mod 1.4.5 on Kiwi 9 -> `1.4.5_kiwi9`. Already-suffixed
+  versions are left alone; a missing mod version falls back to the
+  template version. Implemented in both `tools/patcher.py` and the
+  exporter's Java `ApkPatcher`.
+- **Update check:** `_database/version.txt` in this repo holds only
+  the latest major version number (`9`). The exporter fetches that
+  file from `raw.githubusercontent.com` (same technique as Kiwi
+  Launcher's `update.json` check) and reports only "update available"
+  or "up to date" — no download link, the user updates manually.
+
+## Exporter UI (v9, Material-style, framework-only)
+Top bar (purple, v9 chip) + side panel (menu) + cards, no androidx
+dependency so the sandbox build stays light:
+- Import card: Pick mod zip, plus Shaders (experimental — tap shows
+  "Shaders will be available soon!").
+- Mod card (after a zip is picked): mod icon (auto-taken from the
+  zip's `icon.png`, root wins, nested `*/icon.png` as fallback),
+  name, result version, package, description.
+- Actions (after a zip is picked / after export): Export, Install,
+  Share, Update export (re-export).
+- General: History, About, Check for updates.
+- Side panel: Open RubyTouch (`in.aevora.ruby`, toast if not
+  installed), Open Launcher (original Kiwi Launcher,
+  `net.kiwi.launcher`), History, About, Check for updates, ReCaver
+  (experimental — tap shows "ReCaver: Released soon!", a CaverEngine
+  recomp reference), credits to Kizi (Kiwi Launcher template) and
+  Quantum Creeper (exporter).
+- History: every exported APK is recorded in
+  `<externalFiles>/exported/history.json` and listed with Install /
+  Share / Delete, any day.
+- Template change in this round: in template mode only, the top-centre
+  gear (settings / return-to-launcher) button is hidden, not removed
+  — normal launcher mode still shows it, and `stopGame()` still
+  finishes the activity.
+
 ## Limits, stated plainly
 - V1 still needs vanilla Swordigo installed. The template gets its game
   libs and original assets from the vanilla APK, exactly like the

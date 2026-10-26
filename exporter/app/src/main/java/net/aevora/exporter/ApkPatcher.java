@@ -45,6 +45,22 @@ public class ApkPatcher {
     public static final String OLD_PACKAGE = "net.aevora.template";
     public static final String OLD_LABEL = "Aevora Template";
     public static final String OLD_VERSION = "9.0";
+    /** Kiwi template major version, from OLD_VERSION ("9.0" -> "9"). */
+    public static final String TEMPLATE_MAJOR = "9";
+
+    /**
+     * Exported APK versionName rule (2026-10-26): the result carries the
+     * MOD's version, not the Kiwi version, with the Kiwi template major
+     * as a suffix — e.g. mod 1.4.5 on Kiwi 9 -> "1.4.5_kiwi9".
+     * Already-suffixed versions are left alone; a missing mod version
+     * falls back to the template version.
+     */
+    public static String exportedVersion(String modVersion) {
+        if (modVersion == null || modVersion.trim().isEmpty()) return OLD_VERSION;
+        String v = modVersion.trim();
+        if (v.contains("_kiwi")) return v;
+        return v + "_kiwi" + TEMPLATE_MAJOR;
+    }
 
     public static void patch(File templateApk, ModZip mod, File outApk) throws IOException {
         List<String> names = new ArrayList<>();
@@ -110,7 +126,7 @@ public class ApkPatcher {
                 repl.put(s, mod.id + s.substring(OLD_PACKAGE.length()));
             }
             if (s.equals(OLD_LABEL)) repl.put(s, mod.name);
-            if (s.equals(OLD_VERSION) && mod.version != null) repl.put(s, mod.version);
+            if (s.equals(OLD_VERSION)) repl.put(s, exportedVersion(mod.version));
         }
         return AxmlPatcher.patch(data, repl);
     }

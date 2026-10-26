@@ -8,8 +8,13 @@ android {
         applicationId "net.aevora.exporter"
         minSdk 24
         targetSdk 36
-        versionCode 1
-        versionName "1.0.0"
+        // Exporter version ALWAYS matches the Kiwi template version in
+        // its assets (2026-10-26 rule): template is Launcher 9.0 / 90,
+        // so the exporter is v9 / 9.0 / 90. When the template pin moves,
+        // bump these together with it. This is NOT the exported mod
+        // version — that is <mod>_kiwi9, set by the patchers.
+        versionCode 90
+        versionName "9.0"
     }
     buildTypes {
         release {

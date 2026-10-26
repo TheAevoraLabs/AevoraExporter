@@ -53,7 +53,11 @@ def parse_mod_props(mod_zip_bytes: bytes):
         try:
             icon = z.read("icon.png")
         except KeyError:
-            pass
+            # Fallback: first nested */icon.png, root wins per contract.
+            for name in z.namelist():
+                if name.lower().endswith("/icon.png"):
+                    icon = z.read(name)
+                    break
     props = {}
     in_mod = False
     for line in text.splitlines():
@@ -270,7 +274,17 @@ def main():
     props, icon = parse_mod_props(mod_bytes)
     new_pkg = props["id"]
     new_name = props.get("name") or new_pkg
-    new_version = props.get("version") or args.old_version
+    # Exported version rule (2026-10-26): mod version + _kiwi<major>,
+    # e.g. 1.4.5 on Kiwi 9 -> "1.4.5_kiwi9". Already-suffixed versions
+    # are left alone; a missing mod version falls back to the template.
+    _major = args.old_version.split(".")[0]
+    _mv = (props.get("version") or "").strip()
+    if not _mv:
+        new_version = args.old_version
+    elif "_kiwi" in _mv:
+        new_version = _mv
+    else:
+        new_version = f"{_mv}_kiwi{_major}"
     if not valid_package(new_pkg):
         print(f"WARNING: mod id {new_pkg!r} is not a valid Android package; "
               "the output will likely fail to install. Using it verbatim per spec.",

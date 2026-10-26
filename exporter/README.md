@@ -1,8 +1,9 @@
 # Exporter app (Android)
 
-App: `net.aevora.exporter`, v1.0.0, minSdk 24, targetSdk 36 (sandbox;
-upstream template values are 37, see project README for why the sandbox
-build uses 36).
+App: `net.aevora.exporter`, v9 (versionName 9.0, versionCode 90,
+matching the Kiwi template — see project README version rules),
+minSdk 24, targetSdk 36 (sandbox; upstream template values are 37,
+see project README for why the sandbox build uses 36).
 
 Template APK is in `app/src/main/assets/template.apk` (copied from
 `out/template-debug.apk`; the exporter always overwrites its

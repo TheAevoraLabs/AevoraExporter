@@ -18,17 +18,24 @@ public class ModZip {
         ModZip m = new ModZip();
         m.zipBytes = zipBytes;
         String props = null;
+        byte[] nestedIcon = null;
         try (ZipInputStream zin = new ZipInputStream(new java.io.ByteArrayInputStream(zipBytes))) {
             ZipEntry e;
             while ((e = zin.getNextEntry()) != null) {
                 if (e.getName().equals("properties.toml")) {
                     props = new String(readAll(zin), java.nio.charset.StandardCharsets.UTF_8);
                 } else if (e.getName().equals("icon.png")) {
+                    // Root icon wins, exactly per the launcher contract.
                     m.iconPng = readAll(zin);
+                } else if (nestedIcon == null
+                        && e.getName().toLowerCase().endsWith("/icon.png")) {
+                    // Fallback for zips that nest the icon one folder deep.
+                    nestedIcon = readAll(zin);
                 }
                 zin.closeEntry();
             }
         }
+        if (m.iconPng == null) m.iconPng = nestedIcon;
         if (props == null) throw new IOException("mod zip missing properties.toml");
         Map<String, String> map = new HashMap<>();
         boolean inMod = false;

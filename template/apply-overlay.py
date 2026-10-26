@@ -88,6 +88,23 @@ replace(main,
         "\t\t}",
         "MainActivity.stopGame")
 
+# 3b. Gear button: in template mode, HIDE the top-centre gear
+# (settings / return-to-launcher) button, do NOT remove it. The
+# function stays: normal launcher mode still calls initGameButtons,
+# and template stopGame() still finishes the activity. Only the
+# template's in-game gear is skipped, so exported games show a clean
+# top bar.
+replace(main,
+        "\t\t// gearButton (for closing the mod)\n"
+        "\t\tLauncher.initGameButtons(this);",
+        "\t\t// Aevora template overlay: hide the gear in template mode.\n"
+        "\t\t// Function is kept, not removed: normal launcher mode\n"
+        "\t\t// still shows it, template mode just does not create it.\n"
+        "\t\tif (!TemplateBoot.isTemplateMode(this)) {\n"
+        "\t\t\tLauncher.initGameButtons(this);\n"
+        "\t\t}",
+        "MainActivity gear hide (template mode)")
+
 # 4. Manifest literal label
 manifest = src / "app/src/main/AndroidManifest.xml"
 replace(manifest, 'android:label="@string/app_name"',
