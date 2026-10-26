@@ -343,14 +343,17 @@ def main():
             ni.compress_type = zipfile.ZIP_STORED if info.filename.endswith(".so") else zipfile.ZIP_DEFLATED
             zout.writestr(ni, data)
 
-    if args.skip_sign:
-        tmp_apk.replace(args.out)
-        print(f"wrote (unsigned): {args.out}")
-        return
-
+    # Zipalign is MANDATORY on every path (2026-10-26): the exported
+    # APK is always sanitised/aligned before it leaves here, signed
+    # or not. A zipalign failure fails the whole export, never a
+    # silent unaligned output.
     bt = Path(args.build_tools)
     aligned = Path(args.out + ".aligned")
     subprocess.run([str(bt / "zipalign"), "-f", "4", str(tmp_apk), str(aligned)], check=True)
+    if args.skip_sign:
+        aligned.replace(args.out)
+        print(f"wrote (unsigned, zipaligned): {args.out}")
+        return
     keystore = args.keystore or str(Path(args.out).parent / "aevora-test.keystore")
     if not Path(keystore).exists():
         print(f"creating test keystore: {keystore}")

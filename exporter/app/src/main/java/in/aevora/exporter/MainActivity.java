@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.BitmapFactory;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
@@ -14,6 +15,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -23,27 +25,37 @@ import java.io.File;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.text.DateFormat;
+import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * Aevora Exporter v9 UI — Material-style, framework-only (no androidx,
- * so the sandbox build stays dependency-light apart from apksig).
+ * Aevora Exporter v9 — complete GUI rewrite (2026-10-26).
  *
- * Layout, top to bottom:
- * - Top bar (purple): menu button -> side panel, title, "v9" chip.
- * - Import card: Pick mod zip + Shaders (experimental).
- * - Mod card (after a zip is picked): mod icon, name, result version
- *   (<mod>_kiwi9), package, description.
- * - Action row (after a zip is picked, and after export): Export,
- *   then Install / Share / Update export.
- * - General card: History, About, Check for updates.
- * - Side panel: Open RubyTouch, Open Launcher (original Kiwi
- *   Launcher), History, About, Check for updates, ReCaver
- *   (experimental), credits to Kizi and Quantum Creeper.
+ * Why a rewrite: the previous single-scroll layout had a real bug —
+ * the action row put MATCH_PARENT buttons inside a horizontal row,
+ * so Export took the whole row and Install/Share/Update were
+ * squeezed off-screen, and the status text scrolled away. This
+ * version is a proper multi-panel app:
  *
- * Version rule: this app is v9 because the template in its assets is
- * Kiwi Launcher 9.0. Exported APKs do NOT carry v9 — they carry
- * <mod version>_kiwi9 (see ApkPatcher.exportedVersion).
+ * - Top bar (menu + title + v9 chip, fixed at the top).
+ * - Four panels, one visible at a time: Home, History, APK Tools,
+ *   About. Switched from the bottom nav OR the side drawer.
+ * - Side drawer (left, slides in, scrim to close): same four
+ *   panels + Open RubyTouch + Open Launcher + Check for updates +
+ *   credits.
+ * - Bottom progress bar, FIXED at the bottom (never scrolled away,
+ *   never removed): stage text + determinate progress. Layout
+ *   height is fixed, so starting/stopping work never jumps the UI.
+ *
+ * Export stages, always in this order, every time, no exceptions:
+ *   Patch -> Zipalign (MANDATORY) -> Sign -> Save -> Done.
+ * If zipalign fails, the export FAILS with a clear error — it never
+ * silently ships an unaligned APK. The Python reference patcher
+ * does the same (zipalign -f 4, check=True, even on --skip-sign).
+ *
+ * Framework-only, no androidx. Version rule: this app is v9
+ * (template Kiwi 9.0); exported APKs are <mod>_kiwi9.
  */
 public class MainActivity extends Activity {
 
@@ -54,7 +66,6 @@ public class MainActivity extends Activity {
     private static final String UPDATE_URL =
             "https://raw.githubusercontent.com/TheAevoraLabs/AevoraExporter"
             + "/main/_database/version.txt";
-    /** Local major version, from _database/version.txt ("9"). */
     private static final int LOCAL_MAJOR = 9;
 
     private static final int PURPLE = 0xFF6750A4;
@@ -62,279 +73,454 @@ public class MainActivity extends Activity {
     private static final int CARD = 0xFFFFFFFF;
     private static final int ON_SURFACE = 0xFF1D1B20;
     private static final int SECONDARY = 0xFF49454F;
+    private static final int TEAL = 0xFF7CE7C4;
 
-    private TextView status;
-    private LinearLayout modCard, actionRow;
+    private static final int PANEL_HOME = 0;
+    private static final int PANEL_HISTORY = 1;
+    private static final int PANEL_TOOLS = 2;
+    private static final int PANEL_ABOUT = 3;
+
+    private View[] panels;
+    private Button[] navButtons;
+    private TextView topTitle;
+    private ProgressBar progressBar;
+    private TextView stageText;
+
+    // Home panel
+    private LinearLayout modCard;
     private ImageView modIcon;
     private TextView modName, modMeta;
-    private Button exportBtn, installBtn, shareBtn, updateBtn;
+    private Button exportBtn;
+    private LinearLayout postRow;
+    private Button installBtn, shareBtn, updateBtn;
     private ModZip picked;
     private File lastExported;
-    private LinearLayout sidePanel;
+
+    // Tools panel
+    private LinearLayout toolsPostRow;
+    private Button toolsInstallBtn, toolsShareBtn;
+
+    // History panel
+    private LinearLayout historyList;
+    private TextView historyEmpty;
+
+    // Drawer
+    private LinearLayout drawer;
     private View scrim;
-    private boolean panelOpen;
+    private boolean drawerOpen;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(SURFACE);
 
-        // ---- Main scrollable content ----
-        ScrollView scroll = new ScrollView(this);
+        // ---- Main column: top bar / panels / progress / bottom nav ----
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.VERTICAL);
-        main.setPadding(dp(16), dp(16), dp(16), dp(16));
 
-        // Top bar
+        // Top bar, fixed
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.setBackgroundColor(PURPLE);
-        top.setPadding(dp(12), dp(12), dp(12), dp(12));
+        top.setPadding(dp(8), dp(8), dp(8), dp(8));
         Button menu = new Button(this);
         menu.setText("\u2630");
+        menu.setTextSize(20);
         menu.setTextColor(0xFFFFFFFF);
         menu.setBackgroundColor(0x00000000);
-        menu.setOnClickListener(v -> openPanel());
+        menu.setPadding(dp(12), dp(8), dp(12), dp(8));
+        menu.setOnClickListener(v -> openDrawer());
         top.addView(menu);
-        TextView title = new TextView(this);
-        title.setText("Aevora Exporter");
-        title.setTextSize(22);
-        title.setTypeface(null, android.graphics.Typeface.BOLD);
-        title.setTextColor(0xFFFFFFFF);
+        topTitle = new TextView(this);
+        topTitle.setText("Home");
+        topTitle.setTextSize(20);
+        topTitle.setTypeface(null, Typeface.BOLD);
+        topTitle.setTextColor(0xFFFFFFFF);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        title.setLayoutParams(tp);
-        top.addView(title);
+        topTitle.setLayoutParams(tp);
+        top.addView(topTitle);
         TextView chip = new TextView(this);
         chip.setText("v9");
         chip.setTextColor(0xFF1D1B20);
-        chip.setBackgroundColor(0xFF7CE7C4);
+        chip.setBackgroundColor(TEAL);
         chip.setPadding(dp(10), dp(4), dp(10), dp(4));
         top.addView(chip);
         main.addView(top);
 
-        // Import card
-        LinearLayout importCard = card();
-        TextView importTitle = new TextView(this);
-        importTitle.setText("Import a mod");
-        importTitle.setTextSize(18);
-        importTitle.setTypeface(null, android.graphics.Typeface.BOLD);
-        importTitle.setTextColor(ON_SURFACE);
-        importCard.addView(importTitle);
-        TextView importHint = new TextView(this);
-        importHint.setText("Pick a Kiwi Launcher zip mod. The exporter patches "
-                + "the bundled template APK with that mod's package, name, "
-                + "version and icon, then hands the result to the installer.");
-        importHint.setTextColor(SECONDARY);
-        importCard.addView(importHint);
-        Button pickBtn = primaryButton("Pick mod zip");
-        pickBtn.setOnClickListener(v -> pickZip());
-        importCard.addView(pickBtn);
-        Button shaders = secondaryButton("Shaders  •  experimental");
-        shaders.setOnClickListener(v -> {
-            Toast.makeText(this, "Shaders will be available soon!",
-                    Toast.LENGTH_SHORT).show();
-            status("Shaders: will be available soon!");
-        });
-        importCard.addView(shaders);
-        main.addView(importCard);
+        // Panels container, weight 1
+        FrameLayout content = new FrameLayout(this);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        content.setLayoutParams(cp);
+        panels = new View[4];
+        panels[PANEL_HOME] = buildHomePanel();
+        panels[PANEL_HISTORY] = buildHistoryPanel();
+        panels[PANEL_TOOLS] = buildToolsPanel();
+        panels[PANEL_ABOUT] = buildAboutPanel();
+        for (View p : panels) content.addView(p);
+        main.addView(content);
 
-        // Mod card (hidden until a zip is picked)
-        modCard = card();
-        modCard.setVisibility(View.GONE);
-        LinearLayout modRow = new LinearLayout(this);
-        modRow.setOrientation(LinearLayout.HORIZONTAL);
-        modIcon = new ImageView(this);
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(72), dp(72));
-        ip.setMargins(0, 0, dp(12), 0);
-        modIcon.setLayoutParams(ip);
-        modRow.addView(modIcon);
-        LinearLayout modText = new LinearLayout(this);
-        modText.setOrientation(LinearLayout.VERTICAL);
-        modName = new TextView(this);
-        modName.setTextSize(19);
-        modName.setTypeface(null, android.graphics.Typeface.BOLD);
-        modName.setTextColor(ON_SURFACE);
-        modText.addView(modName);
-        modMeta = new TextView(this);
-        modMeta.setTextColor(SECONDARY);
-        modText.addView(modMeta);
-        modRow.addView(modText);
-        modCard.addView(modRow);
-        main.addView(modCard);
+        // Progress bar, FIXED at bottom, fixed height, never removed.
+        // When idle the bar is invisible but the row stays, so the
+        // layout never jumps when work starts or stops.
+        LinearLayout progressRow = new LinearLayout(this);
+        progressRow.setOrientation(LinearLayout.VERTICAL);
+        progressRow.setBackgroundColor(CARD);
+        progressRow.setPadding(dp(16), dp(8), dp(16), dp(8));
+        stageText = new TextView(this);
+        stageText.setText("Ready.");
+        stageText.setTextColor(SECONDARY);
+        progressRow.addView(stageText);
+        progressBar = new ProgressBar(this, null,
+                android.R.attr.progressBarStyleHorizontal);
+        progressBar.setMax(100);
+        progressBar.setProgress(0);
+        progressBar.setVisibility(View.INVISIBLE);
+        progressRow.addView(progressBar,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+        main.addView(progressRow);
 
-        // Action row (hidden until a zip is picked)
-        actionRow = new LinearLayout(this);
-        actionRow.setOrientation(LinearLayout.HORIZONTAL);
-        actionRow.setVisibility(View.GONE);
-        exportBtn = primaryButton("Export APK");
-        exportBtn.setOnClickListener(v -> exportApk());
-        installBtn = secondaryButton("Install");
-        installBtn.setVisibility(View.GONE);
-        installBtn.setOnClickListener(v -> {
-            if (lastExported != null) install(lastExported);
-        });
-        shareBtn = secondaryButton("Share");
-        shareBtn.setVisibility(View.GONE);
-        shareBtn.setOnClickListener(v -> {
-            if (lastExported != null) share(lastExported);
-        });
-        updateBtn = secondaryButton("Update export");
-        updateBtn.setVisibility(View.GONE);
-        updateBtn.setOnClickListener(v -> exportApk());
-        actionRow.addView(exportBtn);
-        actionRow.addView(installBtn);
-        actionRow.addView(shareBtn);
-        actionRow.addView(updateBtn);
-        main.addView(actionRow);
+        // Bottom nav, fixed
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setBackgroundColor(CARD);
+        nav.setElevation(dp(4));
+        String[] labels = {"Home", "History", "Tools", "About"};
+        navButtons = new Button[4];
+        for (int i = 0; i < 4; i++) {
+            final int panel = i;
+            Button b = new Button(this);
+            b.setText(labels[i]);
+            b.setBackgroundColor(0x00000000);
+            b.setPadding(0, dp(12), 0, dp(12));
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            b.setLayoutParams(bp);
+            b.setOnClickListener(v -> showPanel(panel));
+            navButtons[i] = b;
+            nav.addView(b);
+        }
+        main.addView(nav);
 
-        // APK tools card: AEE-style align + resign for ANY APK.
-        // Uses the copied AEE ZipAlign (GPLv3) + this app's own
-        // AndroidKeyStore signer. This is the tool that fixes the
-        // class of install failure the exporter hit on 2026-10-26:
-        // unaligned .so files in an APK that the installer refuses.
-        LinearLayout tools = card();
-        TextView toolsTitle = new TextView(this);
-        toolsTitle.setText("APK tools");
-        toolsTitle.setTextSize(18);
-        toolsTitle.setTypeface(null, android.graphics.Typeface.BOLD);
-        toolsTitle.setTextColor(ON_SURFACE);
-        tools.addView(toolsTitle);
-        TextView toolsHint = new TextView(this);
-        toolsHint.setText("Pick any APK: it gets zipaligned (4-byte, 16 KB "
-                + "for .so files) and re-signed with this device's key, "
-                + "then saved to History. Signatures are stripped first, "
-                + "so an already-signed APK can be re-signed cleanly.");
-        toolsHint.setTextColor(SECONDARY);
-        tools.addView(toolsHint);
-        Button alignBtn = secondaryButton("Pick APK to align & sign");
-        alignBtn.setOnClickListener(v -> pickApk());
-        tools.addView(alignBtn);
-        main.addView(tools);
+        root.addView(main);
 
-        // General card
-        LinearLayout general = card();
-        TextView generalTitle = new TextView(this);
-        generalTitle.setText("General");
-        generalTitle.setTextSize(18);
-        generalTitle.setTypeface(null, android.graphics.Typeface.BOLD);
-        generalTitle.setTextColor(ON_SURFACE);
-        general.addView(generalTitle);
-        Button history = secondaryButton("History");
-        history.setOnClickListener(v -> startActivity(
-                new Intent(this, HistoryActivity.class)));
-        general.addView(history);
-        Button about = secondaryButton("About");
-        about.setOnClickListener(v -> showAbout());
-        general.addView(about);
-        Button check = secondaryButton("Check for updates");
-        check.setOnClickListener(v -> checkUpdate());
-        general.addView(check);
-        main.addView(general);
-
-        status = new TextView(this);
-        status.setTextColor(SECONDARY);
-        status.setPadding(0, dp(8), 0, 0);
-        main.addView(status);
-
-        scroll.addView(main);
-        root.addView(scroll);
-
-        // ---- Side panel (scrim + sliding panel) ----
+        // ---- Drawer overlay ----
         scrim = new View(this);
         scrim.setBackgroundColor(0x80000000);
         scrim.setVisibility(View.GONE);
-        scrim.setOnClickListener(v -> closePanel());
+        scrim.setOnClickListener(v -> closeDrawer());
         root.addView(scrim);
 
-        sidePanel = new LinearLayout(this);
-        sidePanel.setOrientation(LinearLayout.VERTICAL);
-        sidePanel.setBackgroundColor(CARD);
-        sidePanel.setPadding(dp(16), dp(16), dp(16), dp(16));
-        sidePanel.setVisibility(View.GONE);
-        FrameLayout.LayoutParams sp = new FrameLayout.LayoutParams(
-                dp(280), FrameLayout.LayoutParams.MATCH_PARENT);
-        sp.gravity = Gravity.START;
-        sidePanel.setLayoutParams(sp);
-        sidePanel.setElevation(dp(8));
+        drawer = new LinearLayout(this);
+        drawer.setOrientation(LinearLayout.VERTICAL);
+        drawer.setBackgroundColor(CARD);
+        drawer.setPadding(dp(16), dp(16), dp(16), dp(16));
+        drawer.setVisibility(View.GONE);
+        drawer.setElevation(dp(8));
+        FrameLayout.LayoutParams dp2 = new FrameLayout.LayoutParams(
+                dp(300), FrameLayout.LayoutParams.MATCH_PARENT);
+        dp2.gravity = Gravity.START;
+        drawer.setLayoutParams(dp2);
+        drawer.setTranslationX(-dp(300));
 
-        TextView panelTitle = new TextView(this);
-        panelTitle.setText("Aevora Exporter");
-        panelTitle.setTextSize(20);
-        panelTitle.setTypeface(null, android.graphics.Typeface.BOLD);
-        panelTitle.setTextColor(ON_SURFACE);
-        sidePanel.addView(panelTitle);
-        TextView panelSub = new TextView(this);
-        panelSub.setText("v9  •  Template: Kiwi Launcher 9.0");
-        panelSub.setTextColor(SECONDARY);
-        sidePanel.addView(panelSub);
+        ImageView dIcon = new ImageView(this);
+        dIcon.setImageResource(R.mipmap.ic_launcher);
+        LinearLayout.LayoutParams dip = new LinearLayout.LayoutParams(dp(56), dp(56));
+        dIcon.setLayoutParams(dip);
+        drawer.addView(dIcon);
+        TextView dTitle = new TextView(this);
+        dTitle.setText("Aevora Exporter");
+        dTitle.setTextSize(20);
+        dTitle.setTypeface(null, Typeface.BOLD);
+        dTitle.setTextColor(ON_SURFACE);
+        drawer.addView(dTitle);
+        TextView dSub = new TextView(this);
+        dSub.setText("v9  •  Template: Kiwi Launcher 9.0");
+        dSub.setTextColor(SECONDARY);
+        drawer.addView(dSub);
 
-        Button openRuby = secondaryButton("Open RubyTouch");
-        openRuby.setOnClickListener(v -> openApp("in.aevora.ruby", "RubyTouch"));
-        sidePanel.addView(openRuby);
-        Button openLauncher = secondaryButton("Open Launcher (Kiwi)");
-        openLauncher.setOnClickListener(v -> openApp("net.kiwi.launcher",
-                "Kiwi Launcher"));
-        sidePanel.addView(openLauncher);
-        Button panelHistory = secondaryButton("History");
-        panelHistory.setOnClickListener(v -> {
-            closePanel();
-            startActivity(new Intent(this, HistoryActivity.class));
+        drawer.addView(drawerItem("Home", () -> showPanel(PANEL_HOME)));
+        drawer.addView(drawerItem("History", () -> showPanel(PANEL_HISTORY)));
+        drawer.addView(drawerItem("APK Tools", () -> showPanel(PANEL_TOOLS)));
+        drawer.addView(drawerItem("About", () -> showPanel(PANEL_ABOUT)));
+        drawer.addView(drawerItem("Open RubyTouch",
+                () -> openApp("in.aevora.ruby", "RubyTouch")));
+        drawer.addView(drawerItem("Open Launcher (Kiwi)",
+                () -> openApp("net.kiwi.launcher", "Kiwi Launcher")));
+        drawer.addView(drawerItem("Check for updates", this::checkUpdate));
+        TextView credits = new TextView(this);
+        credits.setText("Credits\nTemplate: Kiwi Launcher by Kizi\n"
+                + "Exporter: Quantum Creeper\nAevora Labs\n"
+                + "ZipAlign: APK Explorer & Editor (GPLv3)");
+        credits.setTextColor(SECONDARY);
+        credits.setPadding(0, dp(16), 0, 0);
+        drawer.addView(credits);
+
+        root.addView(drawer);
+        setContentView(root);
+        showPanel(PANEL_HOME);
+    }
+
+    // ================= Panels =================
+
+    private ScrollView buildHomePanel() {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), dp(16), dp(16), dp(16));
+        scroll.addView(col);
+
+        LinearLayout importCard = card();
+        importCard.addView(cardTitle("Import a mod"));
+        TextView hint = new TextView(this);
+        hint.setText("Pick a Kiwi Launcher zip mod. The exporter patches "
+                + "the bundled template APK with that mod's package, name, "
+                + "version and icon, then zipaligns and signs it.");
+        hint.setTextColor(SECONDARY);
+        importCard.addView(hint);
+        Button pick = fullButton("Pick mod zip", PURPLE, 0xFFFFFFFF);
+        pick.setOnClickListener(v -> pickZip());
+        importCard.addView(pick);
+        Button shaders = fullButton("Shaders  •  experimental", 0xFFE0E0E0, ON_SURFACE);
+        shaders.setOnClickListener(v -> {
+            Toast.makeText(this, "Shaders will be available soon!",
+                    Toast.LENGTH_SHORT).show();
+            setStage("Shaders: will be available soon!", 0);
         });
-        sidePanel.addView(panelHistory);
-        Button panelAbout = secondaryButton("About");
-        panelAbout.setOnClickListener(v -> {
-            closePanel();
-            showAbout();
+        importCard.addView(shaders);
+        col.addView(importCard);
+
+        modCard = card();
+        modCard.setVisibility(View.GONE);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        modIcon = new ImageView(this);
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(96), dp(96));
+        ip.setMargins(0, 0, dp(12), 0);
+        modIcon.setLayoutParams(ip);
+        row.addView(modIcon);
+        LinearLayout text = new LinearLayout(this);
+        text.setOrientation(LinearLayout.VERTICAL);
+        modName = new TextView(this);
+        modName.setTextSize(19);
+        modName.setTypeface(null, Typeface.BOLD);
+        modName.setTextColor(ON_SURFACE);
+        text.addView(modName);
+        modMeta = new TextView(this);
+        modMeta.setTextColor(SECONDARY);
+        text.addView(modMeta);
+        row.addView(text);
+        modCard.addView(row);
+        col.addView(modCard);
+
+        LinearLayout exportCard = card();
+        exportCard.addView(cardTitle("Export"));
+        TextView note = new TextView(this);
+        note.setText("Every export is zipaligned before signing, every "
+                + "time. If zipalign fails, the export fails — it never "
+                + "ships an unaligned APK.");
+        note.setTextColor(SECONDARY);
+        exportCard.addView(note);
+        exportBtn = fullButton("Export APK", PURPLE, 0xFFFFFFFF);
+        exportBtn.setTextSize(18);
+        exportBtn.setOnClickListener(v -> exportApk());
+        exportCard.addView(exportBtn);
+
+        postRow = new LinearLayout(this);
+        postRow.setOrientation(LinearLayout.HORIZONTAL);
+        postRow.setVisibility(View.GONE);
+        installBtn = rowButton("Install");
+        installBtn.setOnClickListener(v -> {
+            if (lastExported != null) install(lastExported);
         });
-        sidePanel.addView(panelAbout);
-        Button panelCheck = secondaryButton("Check for updates");
-        panelCheck.setOnClickListener(v -> {
-            closePanel();
-            checkUpdate();
+        shareBtn = rowButton("Share");
+        shareBtn.setOnClickListener(v -> {
+            if (lastExported != null) share(lastExported);
         });
-        sidePanel.addView(panelCheck);
-        Button recaver = secondaryButton("ReCaver  •  experimental");
+        updateBtn = rowButton("Update");
+        updateBtn.setOnClickListener(v -> exportApk());
+        postRow.addView(installBtn);
+        postRow.addView(shareBtn);
+        postRow.addView(updateBtn);
+        exportCard.addView(postRow);
+        col.addView(exportCard);
+
+        return scroll;
+    }
+
+    private ScrollView buildHistoryPanel() {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), dp(16), dp(16), dp(16));
+        scroll.addView(col);
+        col.addView(cardTitle("Export history"));
+        TextView hint = new TextView(this);
+        hint.setText("APKs stay in the exporter's files folder. Install or "
+                + "share them again any day, or delete them here.");
+        hint.setTextColor(SECONDARY);
+        col.addView(hint);
+        historyEmpty = new TextView(this);
+        historyEmpty.setText("Nothing exported yet. Export a mod from Home first.");
+        historyEmpty.setTextColor(SECONDARY);
+        col.addView(historyEmpty);
+        historyList = new LinearLayout(this);
+        historyList.setOrientation(LinearLayout.VERTICAL);
+        col.addView(historyList);
+        return scroll;
+    }
+
+    private ScrollView buildToolsPanel() {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), dp(16), dp(16), dp(16));
+        scroll.addView(col);
+
+        LinearLayout tools = card();
+        tools.addView(cardTitle("APK tools"));
+        TextView hint = new TextView(this);
+        hint.setText("Pick any APK: old signatures are stripped, it is "
+                + "zipaligned (mandatory, every time) and re-signed with "
+                + "this device's key, then saved to History. This fixes "
+                + "APKs that fail install with alignment errors.");
+        hint.setTextColor(SECONDARY);
+        tools.addView(hint);
+        Button align = fullButton("Pick APK to align & sign", PURPLE, 0xFFFFFFFF);
+        align.setOnClickListener(v -> pickApk());
+        tools.addView(align);
+        toolsPostRow = new LinearLayout(this);
+        toolsPostRow.setOrientation(LinearLayout.HORIZONTAL);
+        toolsPostRow.setVisibility(View.GONE);
+        toolsInstallBtn = rowButton("Install");
+        toolsInstallBtn.setOnClickListener(v -> {
+            if (lastExported != null) install(lastExported);
+        });
+        toolsShareBtn = rowButton("Share");
+        toolsShareBtn.setOnClickListener(v -> {
+            if (lastExported != null) share(lastExported);
+        });
+        toolsPostRow.addView(toolsInstallBtn);
+        toolsPostRow.addView(toolsShareBtn);
+        tools.addView(toolsPostRow);
+        col.addView(tools);
+
+        LinearLayout apps = card();
+        apps.addView(cardTitle("Open apps"));
+        Button ruby = fullButton("Open RubyTouch", 0xFFE0E0E0, ON_SURFACE);
+        ruby.setOnClickListener(v -> openApp("in.aevora.ruby", "RubyTouch"));
+        apps.addView(ruby);
+        Button launcher = fullButton("Open Launcher (Kiwi)", 0xFFE0E0E0, ON_SURFACE);
+        launcher.setOnClickListener(v -> openApp("net.kiwi.launcher", "Kiwi Launcher"));
+        apps.addView(launcher);
+        col.addView(apps);
+
+        LinearLayout exp = card();
+        exp.addView(cardTitle("Experimental"));
+        Button recaver = fullButton("ReCaver  •  experimental", 0xFFE0E0E0, ON_SURFACE);
         recaver.setOnClickListener(v -> {
             Toast.makeText(this, "ReCaver: Released soon!",
                     Toast.LENGTH_SHORT).show();
-            status("ReCaver: Released soon! (CaverEngine recomp reference)");
+            setStage("ReCaver: Released soon! (CaverEngine recomp reference)", 0);
         });
-        sidePanel.addView(recaver);
+        exp.addView(recaver);
+        col.addView(exp);
+        return scroll;
+    }
 
-        TextView credits = new TextView(this);
-        credits.setText("Credits\nTemplate: Kiwi Launcher by Kizi\n"
-                + "Exporter: Quantum Creeper\nAevora Labs");
-        credits.setTextColor(SECONDARY);
-        credits.setPadding(0, dp(16), 0, 0);
-        sidePanel.addView(credits);
+    private ScrollView buildAboutPanel() {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), dp(16), dp(16), dp(16));
+        scroll.addView(col);
+        col.addView(cardTitle("About Aevora Exporter"));
+        TextView about = new TextView(this);
+        about.setText("Aevora Exporter v9\n"
+                + "Template: Kiwi Launcher 9.0\n\n"
+                + "Turns a Kiwi Launcher zip mod into a standalone APK "
+                + "that boots straight into that one mod.\n\n"
+                + "Version rules:\n"
+                + "• This app: v9, matching the Kiwi template.\n"
+                + "• Exported APKs: <mod version>_kiwi9, e.g. 1.4.5_kiwi9.\n\n"
+                + "Sanitised every time:\n"
+                + "• Patch -> Zipalign (mandatory) -> Sign -> Save.\n"
+                + "• A failed zipalign fails the export, never a "
+                + "silent unaligned APK.\n\n"
+                + "Credits:\n"
+                + "• Template: Kiwi Launcher by Kizi\n"
+                + "• Exporter: Quantum Creeper\n"
+                + "• Aevora Labs\n"
+                + "• ZipAlign: APK Explorer & Editor (GPLv3)\n\n"
+                + "Limits: exported APKs still need vanilla Swordigo "
+                + "installed, exactly like the launcher. Each exported "
+                + "APK gets its own saves, not the launcher's.");
+        about.setTextColor(ON_SURFACE);
+        col.addView(about);
+        Button check = fullButton("Check for updates", PURPLE, 0xFFFFFFFF);
+        check.setOnClickListener(v -> checkUpdate());
+        col.addView(check);
+        return scroll;
+    }
 
-        root.addView(sidePanel);
-        setContentView(root);
+    // ================= Panel switching / drawer =================
+
+    private void showPanel(int panel) {
+        closeDrawer();
+        String[] titles = {"Home", "History", "APK Tools", "About"};
+        for (int i = 0; i < panels.length; i++) {
+            panels[i].setVisibility(i == panel ? View.VISIBLE : View.GONE);
+            navButtons[i].setTextColor(i == panel ? PURPLE : SECONDARY);
+            navButtons[i].setTypeface(null, i == panel ? Typeface.BOLD : Typeface.NORMAL);
+        }
+        topTitle.setText(titles[panel]);
+        if (panel == PANEL_HISTORY) refreshHistory();
+    }
+
+    private Button drawerItem(String text, Runnable action) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        b.setBackgroundColor(0x00000000);
+        b.setPadding(dp(8), dp(12), dp(8), dp(12));
+        b.setOnClickListener(v -> {
+            closeDrawer();
+            action.run();
+        });
+        return b;
+    }
+
+    private void openDrawer() {
+        drawerOpen = true;
+        scrim.setVisibility(View.VISIBLE);
+        drawer.setVisibility(View.VISIBLE);
+        drawer.animate().translationX(0).setDuration(200).start();
+    }
+
+    private void closeDrawer() {
+        if (!drawerOpen) return;
+        drawerOpen = false;
+        scrim.setVisibility(View.GONE);
+        drawer.animate().translationX(-dp(300)).setDuration(200)
+                .withEndAction(() -> drawer.setVisibility(View.GONE)).start();
     }
 
     @Override
     public void onBackPressed() {
-        if (panelOpen) {
-            closePanel();
+        if (drawerOpen) {
+            closeDrawer();
         } else {
             super.onBackPressed();
         }
     }
 
-    private void openPanel() {
-        panelOpen = true;
-        scrim.setVisibility(View.VISIBLE);
-        sidePanel.setVisibility(View.VISIBLE);
-    }
-
-    private void closePanel() {
-        panelOpen = false;
-        scrim.setVisibility(View.GONE);
-        sidePanel.setVisibility(View.GONE);
-    }
+    // ================= Helpers =================
 
     private LinearLayout card() {
         LinearLayout c = new LinearLayout(this);
@@ -353,29 +539,52 @@ public class MainActivity extends Activity {
         return c;
     }
 
-    private Button primaryButton(String text) {
+    private TextView cardTitle(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(18);
+        t.setTypeface(null, Typeface.BOLD);
+        t.setTextColor(ON_SURFACE);
+        return t;
+    }
+
+    /** Full-width button for vertical stacks only, never in a row. */
+    private Button fullButton(String text, int bg, int fg) {
         Button b = new Button(this);
         b.setText(text);
-        b.setTextColor(0xFFFFFFFF);
-        b.setBackgroundColor(PURPLE);
+        b.setTextColor(fg);
+        b.setBackgroundColor(bg);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
         p.setMargins(0, dp(6), 0, dp(6));
         b.setLayoutParams(p);
         return b;
     }
 
-    private Button secondaryButton(String text) {
+    /** Weighted button for horizontal rows: equal share, never MATCH_PARENT. */
+    private Button rowButton(String text) {
         Button b = new Button(this);
         b.setText(text);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        p.setMargins(0, dp(6), 0, dp(6));
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        p.setMargins(dp(4), dp(4), dp(4), dp(4));
         b.setLayoutParams(p);
         return b;
     }
+
+    /** Progress stage: text + determinate bar. Bar stays in layout
+     *  (invisible when idle) so the UI never jumps. */
+    private void setStage(String text, int progress) {
+        stageText.setText(text);
+        progressBar.setProgress(progress);
+        progressBar.setVisibility(progress > 0 ? View.VISIBLE : View.INVISIBLE);
+    }
+
+    private void setStageOnUi(String text, int progress) {
+        runOnUiThread(() -> setStage(text, progress));
+    }
+
+    // ================= Pick / export / tools =================
 
     private void pickZip() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -407,7 +616,7 @@ public class MainActivity extends Activity {
                     }
                     alignAndSignApk(bytes, name);
                 } catch (Exception e) {
-                    runOnUiThread(() -> status("Align & sign failed: " + e.getMessage()));
+                    setStageOnUi("Align & sign failed: " + e.getMessage(), 0);
                 }
             }).start();
             return;
@@ -434,24 +643,22 @@ public class MainActivity extends Activity {
                         modIcon.setImageResource(R.mipmap.ic_launcher);
                     }
                     modCard.setVisibility(View.VISIBLE);
-                    actionRow.setVisibility(View.VISIBLE);
-                    exportBtn.setVisibility(View.VISIBLE);
-                    installBtn.setVisibility(View.GONE);
-                    shareBtn.setVisibility(View.GONE);
-                    updateBtn.setVisibility(View.GONE);
+                    postRow.setVisibility(View.GONE);
                     if (!PACKAGE_RE.matcher(mod.id).matches()) {
-                        status("Warning: package '" + mod.id + "' is not a valid "
+                        setStage("Warning: package '" + mod.id + "' is not a valid "
                                 + "Android package. Export is blocked — fix the "
-                                + "mod id in properties.toml, do not ship a "
-                                + "broken APK.");
+                                + "mod id in properties.toml.", 0);
                         exportBtn.setEnabled(false);
+                        exportBtn.setAlpha(0.5f);
                     } else {
-                        status("Ready to export as version " + resultVersion + ".");
+                        setStage("Ready to export as version " + resultVersion + ".", 0);
                         exportBtn.setEnabled(true);
+                        exportBtn.setAlpha(1f);
                     }
+                    showPanel(PANEL_HOME);
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> status("Could not read mod zip: " + e.getMessage()));
+                setStageOnUi("Could not read mod zip: " + e.getMessage(), 0);
             }
         }).start();
     }
@@ -459,67 +666,63 @@ public class MainActivity extends Activity {
     private void exportApk() {
         if (picked == null) return;
         exportBtn.setEnabled(false);
-        status("Exporting… patching template, signing, please wait.");
+        exportBtn.setAlpha(0.5f);
         final ModZip mod = picked;
         new Thread(() -> {
             try {
+                setStageOnUi("Stage 1/4: Patching template…", 25);
                 File cacheDir = getCacheDir();
                 File templateFile = new File(cacheDir, "template.apk");
                 copyAsset("template.apk", templateFile);
                 File unsigned = new File(cacheDir, "exported-unsigned.apk");
                 ApkPatcher.patch(templateFile, mod, unsigned);
-                // AEE ZipAlign, deep in the flow: patch -> align -> sign.
-                // Aligning BEFORE signing is what makes the v2/v3
-                // signature valid over aligned data, and it removes
-                // the whole class of unaligned-.so install failures
-                // even if the template's packaging ever changes back.
-                File toSign = unsigned;
-                try {
-                    File aligned = new File(cacheDir, "exported-aligned.apk");
-                    ZipAlign.align(unsigned, aligned);
-                    toSign = aligned;
-                } catch (Exception e) {
-                    // Fall back to the previous behaviour (sign
-                    // unaligned) rather than failing the whole export.
-                    toSign = unsigned;
-                }
+
+                // Stage 2 is MANDATORY. No fallback: a zipalign failure
+                // fails the export, it never ships unaligned.
+                setStageOnUi("Stage 2/4: Zipaligning (mandatory)…", 50);
+                File aligned = new File(cacheDir, "exported-aligned.apk");
+                ZipAlign.align(unsigned, aligned);
+
+                setStageOnUi("Stage 3/4: Signing…", 75);
                 File exportedDir = HistoryStore.exportedDir(this);
                 File out = new File(exportedDir, mod.id + ".apk");
-                Signer.sign(toSign, out);
+                Signer.sign(aligned, out);
+
                 String resultVersion = ApkPatcher.exportedVersion(mod.version);
                 HistoryStore.record(this, mod.id, mod.name, resultVersion,
                         out.getName());
                 lastExported = out;
                 runOnUiThread(() -> {
-                    status("Exported: " + out.getName()
-                            + " (version " + resultVersion + "). Opening installer…");
-                    installBtn.setVisibility(View.VISIBLE);
-                    shareBtn.setVisibility(View.VISIBLE);
-                    updateBtn.setVisibility(View.VISIBLE);
+                    setStage("Done: " + out.getName()
+                            + " (version " + resultVersion + "). Opening installer…", 100);
+                    postRow.setVisibility(View.VISIBLE);
                     install(out);
                     exportBtn.setEnabled(true);
+                    exportBtn.setAlpha(1f);
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
-                    status("Export failed: " + e.getMessage());
+                    setStage("Export failed: " + e.getMessage(), 0);
                     exportBtn.setEnabled(true);
+                    exportBtn.setAlpha(1f);
                 });
             }
         }).start();
     }
 
-    /** APK tools: strip old signatures, zipalign, re-sign, save. */
     private void alignAndSignApk(byte[] apkBytes, String originalName) throws Exception {
-        runOnUiThread(() -> status("Aligning & signing " + originalName + "…"));
+        setStageOnUi("Stage 1/3: Stripping old signatures…", 20);
         File cacheDir = getCacheDir();
-        File picked = new File(cacheDir, "picked.apk");
-        try (java.io.OutputStream out = new java.io.FileOutputStream(picked)) {
+        File pickedFile = new File(cacheDir, "picked.apk");
+        try (java.io.OutputStream out = new java.io.FileOutputStream(pickedFile)) {
             out.write(apkBytes);
         }
         File stripped = new File(cacheDir, "picked-stripped.apk");
-        stripSignatures(picked, stripped);
+        stripSignatures(pickedFile, stripped);
+        setStageOnUi("Stage 2/3: Zipaligning (mandatory)…", 50);
         File aligned = new File(cacheDir, "picked-aligned.apk");
         ZipAlign.align(stripped, aligned);
+        setStageOnUi("Stage 3/3: Signing…", 80);
         String base = originalName.replaceAll("(?i)\\.apk$", "")
                 .replaceAll("[^a-zA-Z0-9._-]", "_");
         File out = new File(HistoryStore.exportedDir(this), "aligned-" + base + ".apk");
@@ -528,17 +731,13 @@ public class MainActivity extends Activity {
                 out.getName());
         lastExported = out;
         runOnUiThread(() -> {
-            status("Aligned & signed: " + out.getName() + ". Opening installer…");
-            actionRow.setVisibility(View.VISIBLE);
-            exportBtn.setVisibility(View.GONE);
-            updateBtn.setVisibility(View.GONE);
-            installBtn.setVisibility(View.VISIBLE);
-            shareBtn.setVisibility(View.VISIBLE);
+            setStage("Done: " + out.getName() + ". Opening installer…", 100);
+            toolsPostRow.setVisibility(View.VISIBLE);
+            showPanel(PANEL_TOOLS);
             install(out);
         });
     }
 
-    /** Copy a zip APK without META-INF/* (old signatures). */
     private void stripSignatures(File in, File out) throws Exception {
         try (java.util.zip.ZipFile zin = new java.util.zip.ZipFile(in);
              java.util.zip.ZipOutputStream zout =
@@ -567,13 +766,57 @@ public class MainActivity extends Activity {
         }
     }
 
-    private byte[] readAll(java.io.InputStream in) throws Exception {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] buf = new byte[8192];
-        int n;
-        while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
-        return out.toByteArray();
+    // ================= History panel =================
+
+    private void refreshHistory() {
+        historyList.removeAllViews();
+        List<HistoryStore.Entry> entries = HistoryStore.load(this);
+        historyEmpty.setVisibility(entries.isEmpty() ? View.VISIBLE : View.GONE);
+        for (HistoryStore.Entry e : entries) {
+            LinearLayout card = card();
+            TextView name = new TextView(this);
+            name.setText(e.name);
+            name.setTextSize(17);
+            name.setTypeface(null, Typeface.BOLD);
+            name.setTextColor(ON_SURFACE);
+            card.addView(name);
+            TextView meta = new TextView(this);
+            meta.setText(e.id + "\nVersion " + e.version + "  •  "
+                    + DateFormat.getDateTimeInstance(DateFormat.SHORT,
+                            DateFormat.SHORT).format(new java.util.Date(e.exportedAt)));
+            meta.setTextColor(SECONDARY);
+            card.addView(meta);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            Button install = rowButton("Install");
+            install.setOnClickListener(v -> {
+                File apk = new File(HistoryStore.exportedDir(this), e.file);
+                if (apk.exists()) install(apk);
+                else Toast.makeText(this, "APK file is gone, re-export it.",
+                        Toast.LENGTH_SHORT).show();
+            });
+            Button share = rowButton("Share");
+            share.setOnClickListener(v -> {
+                File apk = new File(HistoryStore.exportedDir(this), e.file);
+                if (apk.exists()) share(apk);
+                else Toast.makeText(this, "APK file is gone, re-export it.",
+                        Toast.LENGTH_SHORT).show();
+            });
+            Button del = rowButton("Delete");
+            del.setOnClickListener(v -> {
+                HistoryStore.remove(this, e);
+                Toast.makeText(this, "Deleted " + e.file, Toast.LENGTH_SHORT).show();
+                refreshHistory();
+            });
+            row.addView(install);
+            row.addView(share);
+            row.addView(del);
+            card.addView(row);
+            historyList.addView(card);
+        }
     }
+
+    // ================= Misc =================
 
     private void install(File apk) {
         Uri uri = Uri.parse("content://" + getPackageName()
@@ -600,38 +843,15 @@ public class MainActivity extends Activity {
         if (launch == null) {
             Toast.makeText(this, label + " is not installed.",
                     Toast.LENGTH_SHORT).show();
-            status(label + " is not installed on this phone.");
+            setStage(label + " is not installed on this phone.", 0);
             return;
         }
-        closePanel();
+        closeDrawer();
         startActivity(launch);
     }
 
-    private void showAbout() {
-        new AlertDialog.Builder(this)
-                .setTitle("About Aevora Exporter")
-                .setMessage("Aevora Exporter v9\n"
-                        + "Template: Kiwi Launcher 9.0\n\n"
-                        + "Turns a Kiwi Launcher zip mod into a standalone "
-                        + "APK that boots straight into that one mod.\n\n"
-                        + "Version rules:\n"
-                        + "• This app: v9, matching the Kiwi template.\n"
-                        + "• Exported APKs: <mod version>_kiwi9, "
-                        + "e.g. 1.4.5_kiwi9.\n\n"
-                        + "Credits:\n"
-                        + "• Template: Kiwi Launcher by Kizi\n"
-                        + "• Exporter: Quantum Creeper\n"
-                        + "• Aevora Labs\n\n"
-                        + "Limits: exported APKs still need vanilla "
-                        + "Swordigo installed, exactly like the launcher. "
-                        + "Each exported APK gets its own saves, not the "
-                        + "launcher's.")
-                .setPositiveButton("OK", null)
-                .show();
-    }
-
     private void checkUpdate() {
-        status("Checking for updates…");
+        setStage("Checking for updates…", 25);
         new Thread(() -> {
             try {
                 HttpURLConnection c = (HttpURLConnection) new URL(UPDATE_URL)
@@ -654,8 +874,8 @@ public class MainActivity extends Activity {
                 int remote = Integer.parseInt(raw.split("\\.")[0].trim());
                 runOnUiThread(() -> {
                     if (remote > LOCAL_MAJOR) {
-                        status("Update available: v" + remote
-                                + " (you have v" + LOCAL_MAJOR + ").");
+                        setStage("Update available: v" + remote
+                                + " (you have v" + LOCAL_MAJOR + ").", 100);
                         new AlertDialog.Builder(this)
                                 .setTitle("Update available")
                                 .setMessage("Aevora Exporter v" + remote
@@ -667,21 +887,16 @@ public class MainActivity extends Activity {
                                 .setPositiveButton("OK", null)
                                 .show();
                     } else {
-                        status("You are up to date (v" + LOCAL_MAJOR + ").");
+                        setStage("You are up to date (v" + LOCAL_MAJOR + ").", 100);
                         Toast.makeText(this,
                                 "You are up to date (v" + LOCAL_MAJOR + ").",
                                 Toast.LENGTH_SHORT).show();
                     }
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> status("Could not check for updates: "
-                        + e.getMessage()));
+                setStageOnUi("Could not check for updates: " + e.getMessage(), 0);
             }
         }).start();
-    }
-
-    private void status(String s) {
-        status.setText(s);
     }
 
     private byte[] readUri(Uri uri) throws Exception {
@@ -693,6 +908,14 @@ public class MainActivity extends Activity {
             while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
             return out.toByteArray();
         }
+    }
+
+    private byte[] readAll(java.io.InputStream in) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        return out.toByteArray();
     }
 
     private void copyAsset(String asset, File dst) throws Exception {
