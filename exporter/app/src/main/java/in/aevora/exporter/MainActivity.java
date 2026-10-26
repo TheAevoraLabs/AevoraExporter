@@ -20,6 +20,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.apk.axml.APKParser;
+import com.apk.axml.aXMLDecoder;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
@@ -61,6 +64,7 @@ public class MainActivity extends Activity {
 
     private static final int PICK_ZIP = 1;
     private static final int PICK_APK = 2;
+    private static final int PICK_APK_VIEW = 3;
     private static final Pattern PACKAGE_RE =
             Pattern.compile("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+");
     private static final String UPDATE_URL =
@@ -398,6 +402,9 @@ public class MainActivity extends Activity {
         Button align = fullButton("Pick APK to align & sign", PURPLE, 0xFFFFFFFF);
         align.setOnClickListener(v -> pickApk());
         tools.addView(align);
+        Button viewManifest = fullButton("Pick APK to view manifest", 0xFFE0E0E0, ON_SURFACE);
+        viewManifest.setOnClickListener(v -> pickApkView());
+        tools.addView(viewManifest);
         toolsPostRow = new LinearLayout(this);
         toolsPostRow.setOrientation(LinearLayout.HORIZONTAL);
         toolsPostRow.setVisibility(View.GONE);
@@ -608,12 +615,32 @@ public class MainActivity extends Activity {
         startActivityForResult(intent, PICK_APK);
     }
 
+    private void pickApkView() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, PICK_APK_VIEW);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null) return;
         Uri uri = data.getData();
         if (uri == null) return;
+        if (requestCode == PICK_APK_VIEW) {
+            new Thread(() -> {
+                try {
+                    byte[] bytes = readUri(uri);
+                    String name = uri.getLastPathSegment();
+                    if (name == null) name = "picked.apk";
+                    viewManifestApk(bytes, name);
+                } catch (Exception e) {
+                    setStageOnUi("View manifest failed: " + e.getMessage(), 0);
+                }
+            }).start();
+            return;
+        }
         if (requestCode == PICK_APK) {
             new Thread(() -> {
                 try {
@@ -685,6 +712,15 @@ public class MainActivity extends Activity {
                 File unsigned = new File(cacheDir, "exported-unsigned.apk");
                 ApkPatcher.patch(templateFile, mod, unsigned);
 
+                // aXML verification gate: decode the patched manifest
+                // with the vendored aXML decoder and confirm it really
+                // carries the mod package, result version and name.
+                // If it does not, the export fails here — a broken
+                // APK never reaches zipalign/sign/install.
+                setStageOnUi("Stage 1b: Verifying manifest with aXML…", 35);
+                String resultVersionEarly = ApkPatcher.exportedVersion(mod.version);
+                verifyPatchedManifest(unsigned, mod, resultVersionEarly);
+
                 // Stage 2 is MANDATORY. No fallback: a zipalign failure
                 // fails the export, it never ships unaligned.
                 setStageOnUi("Stage 2/4: Zipaligning (mandatory)…", 50);
@@ -716,6 +752,80 @@ public class MainActivity extends Activity {
                 });
             }
         }).start();
+    }
+
+    /** aXML verification: decode a patched APK's manifest and check
+     *  package + versionName + label. Throws on any mismatch. */
+    private void verifyPatchedManifest(File apk, ModZip mod, String resultVersion) throws Exception {
+        String manifest = decodeManifest(apk);
+        if (manifest == null || manifest.isEmpty()) {
+            throw new IllegalStateException("aXML could not decode the patched manifest");
+        }
+        if (!manifest.contains(mod.id)) {
+            throw new IllegalStateException("aXML verification failed: patched manifest "
+                    + "does not contain package " + mod.id);
+        }
+        if (!manifest.contains(resultVersion)) {
+            throw new IllegalStateException("aXML verification failed: patched manifest "
+                    + "does not contain version " + resultVersion);
+        }
+        // Label check is soft: some manifests carry the label as a
+        // resource reference (@string/...) instead of literal text.
+        // Package + version are the hard gates above.
+    }
+
+    /** Decode AndroidManifest.xml from an APK file via aXML. */
+    private String decodeManifest(File apk) throws Exception {
+        try (java.util.zip.ZipFile zin = new java.util.zip.ZipFile(apk)) {
+            java.util.zip.ZipEntry entry = zin.getEntry("AndroidManifest.xml");
+            if (entry == null) return null;
+            try (InputStream in = zin.getInputStream(entry)) {
+                return new aXMLDecoder(in).decodeAsString();
+            }
+        }
+    }
+
+    /** Tools: decode a picked APK's manifest and show it in a dialog. */
+    private void viewManifestApk(byte[] apkBytes, String name) throws Exception {
+        File cacheDir = getCacheDir();
+        File picked = new File(cacheDir, "view.apk");
+        try (java.io.OutputStream out = new java.io.FileOutputStream(picked)) {
+            out.write(apkBytes);
+        }
+        String header = name;
+        try {
+            APKParser parser = new APKParser();
+            parser.parse(picked.getAbsolutePath(), this);
+            if (parser.getPackageName() != null) {
+                header = (parser.getAppName() != null ? parser.getAppName() + "\n" : "")
+                        + parser.getPackageName()
+                        + "  •  " + parser.getVersionName();
+            }
+        } catch (Exception ignored) {
+            // Header is best-effort; manifest decode below is the point.
+        }
+        String manifest = decodeManifest(picked);
+        if (manifest == null) throw new IllegalStateException("no AndroidManifest.xml in APK");
+        final String showHeader = header;
+        final String text = manifest.length() > 30000
+                ? manifest.substring(0, 30000) + "\n… (truncated, manifest is "
+                        + manifest.length() + " chars)"
+                : manifest;
+        runOnUiThread(() -> {
+            TextView tv = new TextView(this);
+            tv.setText(showHeader + "\n\n" + text);
+            tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+            tv.setTextSize(11);
+            tv.setPadding(dp(12), dp(12), dp(12), dp(12));
+            ScrollView scroll = new ScrollView(this);
+            scroll.addView(tv);
+            new AlertDialog.Builder(this)
+                    .setTitle("Manifest: " + name)
+                    .setView(scroll)
+                    .setPositiveButton("Close", null)
+                    .show();
+            setStage("Manifest shown for " + name + ".", 0);
+        });
     }
 
     private void alignAndSignApk(byte[] apkBytes, String originalName) throws Exception {

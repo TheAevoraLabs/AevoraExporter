@@ -148,6 +148,23 @@ with credit, not blindly:
   becomes possible; without it, the string-pool patcher stays the
   right tool for package/label/version.
 
+## aXML vendored (2026-10-26)
+https://github.com/apk-editor/aXML, GPLv3, library/ only (15 files,
+148 KB, `com.apk.axml`), copied verbatim except androidx
+`@RequiresApi` annotations stripped (this app has no androidx dep).
+Used in two places, both read-side and safe:
+- **Verification gate in export:** after patching, the patched
+  manifest is decoded with `aXMLDecoder` and must contain the mod
+  package + result version, or the export fails before zipalign.
+- **Tools panel, "Pick APK to view manifest":** decodes any APK's
+  manifest to readable XML and shows it, with package/version from
+  `APKParser` as the header.
+- The **encoder** (`aXMLEncoder`, text XML -> binary XML) is
+  vendored but NOT used for export yet: replacing the proven
+  string-pool patcher with a full re-encode is a bigger, riskier
+  change that needs a device round-trip test first. It is available
+  in-app for that next step.
+
 ## Version rules (2026-10-26)
 - **Exporter app: v9.** Its version always matches the Kiwi template
   in its assets (Launcher 9.0 / versionCode 90). When the template pin
