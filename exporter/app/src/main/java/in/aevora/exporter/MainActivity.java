@@ -1,4 +1,4 @@
-package net.aevora.exporter;
+package in.aevora.exporter;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -48,6 +48,7 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
 
     private static final int PICK_ZIP = 1;
+    private static final int PICK_APK = 2;
     private static final Pattern PACKAGE_RE =
             Pattern.compile("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+");
     private static final String UPDATE_URL =
@@ -188,6 +189,30 @@ public class MainActivity extends Activity {
         actionRow.addView(shareBtn);
         actionRow.addView(updateBtn);
         main.addView(actionRow);
+
+        // APK tools card: AEE-style align + resign for ANY APK.
+        // Uses the copied AEE ZipAlign (GPLv3) + this app's own
+        // AndroidKeyStore signer. This is the tool that fixes the
+        // class of install failure the exporter hit on 2026-10-26:
+        // unaligned .so files in an APK that the installer refuses.
+        LinearLayout tools = card();
+        TextView toolsTitle = new TextView(this);
+        toolsTitle.setText("APK tools");
+        toolsTitle.setTextSize(18);
+        toolsTitle.setTypeface(null, android.graphics.Typeface.BOLD);
+        toolsTitle.setTextColor(ON_SURFACE);
+        tools.addView(toolsTitle);
+        TextView toolsHint = new TextView(this);
+        toolsHint.setText("Pick any APK: it gets zipaligned (4-byte, 16 KB "
+                + "for .so files) and re-signed with this device's key, "
+                + "then saved to History. Signatures are stripped first, "
+                + "so an already-signed APK can be re-signed cleanly.");
+        toolsHint.setTextColor(SECONDARY);
+        tools.addView(toolsHint);
+        Button alignBtn = secondaryButton("Pick APK to align & sign");
+        alignBtn.setOnClickListener(v -> pickApk());
+        tools.addView(alignBtn);
+        main.addView(tools);
 
         // General card
         LinearLayout general = card();
@@ -359,12 +384,35 @@ public class MainActivity extends Activity {
         startActivityForResult(intent, PICK_ZIP);
     }
 
+    private void pickApk() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, PICK_APK);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != PICK_ZIP || resultCode != RESULT_OK || data == null) return;
+        if (resultCode != RESULT_OK || data == null) return;
         Uri uri = data.getData();
         if (uri == null) return;
+        if (requestCode == PICK_APK) {
+            new Thread(() -> {
+                try {
+                    byte[] bytes = readUri(uri);
+                    String name = uri.getLastPathSegment();
+                    if (name == null || !name.toLowerCase().endsWith(".apk")) {
+                        name = "picked.apk";
+                    }
+                    alignAndSignApk(bytes, name);
+                } catch (Exception e) {
+                    runOnUiThread(() -> status("Align & sign failed: " + e.getMessage()));
+                }
+            }).start();
+            return;
+        }
+        if (requestCode != PICK_ZIP) return;
         new Thread(() -> {
             try {
                 byte[] bytes = readUri(uri);
@@ -387,6 +435,7 @@ public class MainActivity extends Activity {
                     }
                     modCard.setVisibility(View.VISIBLE);
                     actionRow.setVisibility(View.VISIBLE);
+                    exportBtn.setVisibility(View.VISIBLE);
                     installBtn.setVisibility(View.GONE);
                     shareBtn.setVisibility(View.GONE);
                     updateBtn.setVisibility(View.GONE);
@@ -419,9 +468,24 @@ public class MainActivity extends Activity {
                 copyAsset("template.apk", templateFile);
                 File unsigned = new File(cacheDir, "exported-unsigned.apk");
                 ApkPatcher.patch(templateFile, mod, unsigned);
+                // AEE ZipAlign, deep in the flow: patch -> align -> sign.
+                // Aligning BEFORE signing is what makes the v2/v3
+                // signature valid over aligned data, and it removes
+                // the whole class of unaligned-.so install failures
+                // even if the template's packaging ever changes back.
+                File toSign = unsigned;
+                try {
+                    File aligned = new File(cacheDir, "exported-aligned.apk");
+                    ZipAlign.align(unsigned, aligned);
+                    toSign = aligned;
+                } catch (Exception e) {
+                    // Fall back to the previous behaviour (sign
+                    // unaligned) rather than failing the whole export.
+                    toSign = unsigned;
+                }
                 File exportedDir = HistoryStore.exportedDir(this);
                 File out = new File(exportedDir, mod.id + ".apk");
-                Signer.sign(unsigned, out);
+                Signer.sign(toSign, out);
                 String resultVersion = ApkPatcher.exportedVersion(mod.version);
                 HistoryStore.record(this, mod.id, mod.name, resultVersion,
                         out.getName());
@@ -442,6 +506,73 @@ public class MainActivity extends Activity {
                 });
             }
         }).start();
+    }
+
+    /** APK tools: strip old signatures, zipalign, re-sign, save. */
+    private void alignAndSignApk(byte[] apkBytes, String originalName) throws Exception {
+        runOnUiThread(() -> status("Aligning & signing " + originalName + "…"));
+        File cacheDir = getCacheDir();
+        File picked = new File(cacheDir, "picked.apk");
+        try (java.io.OutputStream out = new java.io.FileOutputStream(picked)) {
+            out.write(apkBytes);
+        }
+        File stripped = new File(cacheDir, "picked-stripped.apk");
+        stripSignatures(picked, stripped);
+        File aligned = new File(cacheDir, "picked-aligned.apk");
+        ZipAlign.align(stripped, aligned);
+        String base = originalName.replaceAll("(?i)\\.apk$", "")
+                .replaceAll("[^a-zA-Z0-9._-]", "_");
+        File out = new File(HistoryStore.exportedDir(this), "aligned-" + base + ".apk");
+        Signer.sign(aligned, out);
+        HistoryStore.record(this, base, originalName, "aligned+resigned",
+                out.getName());
+        lastExported = out;
+        runOnUiThread(() -> {
+            status("Aligned & signed: " + out.getName() + ". Opening installer…");
+            actionRow.setVisibility(View.VISIBLE);
+            exportBtn.setVisibility(View.GONE);
+            updateBtn.setVisibility(View.GONE);
+            installBtn.setVisibility(View.VISIBLE);
+            shareBtn.setVisibility(View.VISIBLE);
+            install(out);
+        });
+    }
+
+    /** Copy a zip APK without META-INF/* (old signatures). */
+    private void stripSignatures(File in, File out) throws Exception {
+        try (java.util.zip.ZipFile zin = new java.util.zip.ZipFile(in);
+             java.util.zip.ZipOutputStream zout =
+                     new java.util.zip.ZipOutputStream(
+                             new java.io.FileOutputStream(out))) {
+            java.util.Enumeration<? extends java.util.zip.ZipEntry> en = zin.entries();
+            while (en.hasMoreElements()) {
+                java.util.zip.ZipEntry e = en.nextElement();
+                if (e.getName().startsWith("META-INF/")) continue;
+                java.util.zip.ZipEntry copy = new java.util.zip.ZipEntry(e.getName());
+                byte[] data = readAll(zin.getInputStream(e));
+                if (e.getMethod() == java.util.zip.ZipEntry.STORED) {
+                    copy.setMethod(java.util.zip.ZipEntry.STORED);
+                    copy.setSize(data.length);
+                    copy.setCompressedSize(data.length);
+                    java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+                    crc.update(data);
+                    copy.setCrc(crc.getValue());
+                } else {
+                    copy.setMethod(java.util.zip.ZipEntry.DEFLATED);
+                }
+                zout.putNextEntry(copy);
+                zout.write(data);
+                zout.closeEntry();
+            }
+        }
+    }
+
+    private byte[] readAll(java.io.InputStream in) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        return out.toByteArray();
     }
 
     private void install(File apk) {

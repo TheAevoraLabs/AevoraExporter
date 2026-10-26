@@ -1,9 +1,13 @@
 # Exporter app (Android)
 
-App: `net.aevora.exporter`, v9 (versionName 9.0, versionCode 90,
+App: `in.aevora.exporter`, v9 (versionName 9.0, versionCode 90,
 matching the Kiwi template — see project README version rules),
 minSdk 24, targetSdk 36 (sandbox; upstream template values are 37,
 see project README for why the sandbox build uses 36).
+
+Export flow is patch -> zipalign (AEE `ZipAlign`, GPLv3, see project
+README) -> sign (AndroidKeyStore key, `Signer.java`). The APK tools
+card reuses the same align + sign path for any APK the user picks.
 
 Template APK is in `app/src/main/assets/template.apk` (copied from
 `out/template-debug.apk`; the exporter always overwrites its

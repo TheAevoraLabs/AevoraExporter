@@ -120,6 +120,34 @@ downgrades SDK 37 -> 36 because platform android-37 is not installed
 in the sandbox SDKs. On a normal machine, point `settings.gradle` at
 `google()` / `mavenCentral()`, drop the JDK pin, and keep SDK 37.
 
+## Licence
+GPLv3 — see `LICENSE`. This project is GPLv3, like the Kiwi Launcher
+template it builds on. That is also why copying from APK Explorer &
+Editor (GPLv3) is clean here: credit + licence included, no licence
+conflict.
+
+## Targeted slice from APK Explorer & Editor (2026-10-26)
+Pulled from https://github.com/apk-editor/APK-Explorer-Editor, copied
+with credit, not blindly:
+- **Copied, adapted:** `ZipAlign.java` (AEE, based on Iyxan23's
+  zipalign-java) — now `exporter/.../ZipAlign.java`, package renamed,
+  androidx annotations stripped (this app has no androidx dependency).
+  It is wired deep into the flow: every export is now
+  patch -> zipalign (4-byte, 16 KB for `.so`) -> sign, and the new
+  "APK tools" card in the app lets any APK be stripped, zipaligned
+  and re-signed on device.
+- **Deliberately NOT copied:** AEE's `APKSigner` needs its `KeyPair`
+  class, which needs sCommon's `FileUtils` — a whole extra library
+  for a signer worse than the one already here. The exporter's own
+  `Signer.java` (AndroidKeyStore key, no embedded private key) stays.
+  AEE's AXML/ARSC editors need the external aXML library (JitPack,
+  not fetchable through the sandbox Maven relay) and sCommon — that
+  layer is the one hard lib, see below.
+- **Hard lib, if wanted next:** aXML (`com.github.apk-editor:aXML`,
+  JitPack). With its source/aar in hand, a full binary-XML editor
+  becomes possible; without it, the string-pool patcher stays the
+  right tool for package/label/version.
+
 ## Version rules (2026-10-26)
 - **Exporter app: v9.** Its version always matches the Kiwi template
   in its assets (Launcher 9.0 / versionCode 90). When the template pin

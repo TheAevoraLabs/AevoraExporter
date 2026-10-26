@@ -2,10 +2,10 @@ plugins {
     alias(libs.plugins.android.application)
 }
 android {
-    namespace 'net.aevora.exporter'
+    namespace 'in.aevora.exporter'
     compileSdk 36
     defaultConfig {
-        applicationId "net.aevora.exporter"
+        applicationId "in.aevora.exporter"
         minSdk 24
         targetSdk 36
         // Exporter version ALWAYS matches the Kiwi template version in

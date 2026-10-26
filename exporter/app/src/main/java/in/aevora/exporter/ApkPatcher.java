@@ -1,4 +1,4 @@
-package net.aevora.exporter;
+package in.aevora.exporter;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
