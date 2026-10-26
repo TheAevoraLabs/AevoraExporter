@@ -1,0 +1,34 @@
+plugins {
+    alias(libs.plugins.android.application)
+}
+android {
+    namespace 'net.aevora.exporter'
+    compileSdk 36
+    defaultConfig {
+        applicationId "net.aevora.exporter"
+        minSdk 24
+        targetSdk 36
+        versionCode 1
+        versionName "1.0.0"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+        }
+        debug {
+            debuggable true
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+dependencies {
+    // No androidx dependency on purpose: the sandbox Gradle cache does
+    // not have a complete androidx.core transitive set, and the exporter
+    // only needs a file provider, which ExportFileProvider implements
+    // with the framework ContentProvider API. apksig has no transitive deps.
+    implementation "com.android.tools.build:apksig:9.3.1"
+}

@@ -1,0 +1,18 @@
+pluginManagement {
+    repositories {
+        maven { url 'http://127.0.0.1:8899/google'; allowInsecureProtocol = true }
+        maven { url 'http://127.0.0.1:8899/central'; allowInsecureProtocol = true }
+        maven { url 'http://127.0.0.1:8899/portal'; allowInsecureProtocol = true }
+    }
+}
+plugins {
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        maven { url 'http://127.0.0.1:8899/google'; allowInsecureProtocol = true }
+        maven { url 'http://127.0.0.1:8899/central'; allowInsecureProtocol = true }
+    }
+}
+rootProject.name = "AevoraExporter"
+include ':app'

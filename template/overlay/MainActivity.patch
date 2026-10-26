@@ -1,0 +1,42 @@
+--- a/app/src/main/java/net/kiwi/launcher/MainActivity.java
++++ b/app/src/main/java/net/kiwi/launcher/MainActivity.java
+@@
+ 		// UI, Previous Crash
+-		showLauncherUi();
++		// Aevora template overlay: single-mod mode skips the launcher UI.
++		// No bundled mod -> behave exactly like the normal launcher.
++		boolean templateMode = TemplateBoot.isTemplateMode(this);
++		if (!templateMode) showLauncherUi();
+ 		checkPreviousCrash();
+ 
+ 		prepareSwordigo();
+ 
+-		// Launcher updates
+-		checkForUpdate();
++		if (templateMode) {
++			// Boot the bundled mod straight away. Any failure falls back
++			// to the normal launcher UI instead of a black screen.
++			ModManager.ModInfo bundled = TemplateBoot.installBundledMod(this);
++			if (bundled != null) {
++				Launcher.currentMod = bundled;
++				launch();
++			} else {
++				showLauncherUi();
++			}
++		} else {
++			// Launcher updates
++			checkForUpdate();
++		}
+ 	}
+@@
+ 		net.kiwi.overlay.Controller.removeAll(); // remove buttons
+ 		setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT); // jump to portrait mode
+ 
+-		showLauncherUi(); // show the launcher ui again
++		// Aevora template overlay: no launcher UI to return to, exit.
++		if (TemplateBoot.isTemplateMode(this)) {
++			finish();
++		} else {
++			showLauncherUi(); // show the launcher ui again
++		}
+ 	}

@@ -1,0 +1,26 @@
+# Build outputs and intermediates — never committed.
+out/
+template/build/
+exporter/build/
+exporter/app/build/
+exporter/.gradle/
+.gradle/
+build/
+
+# Machine-specific Android SDK / NDK paths.
+local.properties
+
+# Generated template asset for the exporter app. Build the template
+# first (template/build-template.sh), then copy out/template-debug.apk
+# to exporter/app/src/main/assets/template.apk before building the
+# exporter. The asset is a build artifact, not source.
+exporter/app/src/main/assets/template.apk
+
+# Signing keys — test keystores included. Never commit a real key.
+*.keystore
+*.jks
+
+# IDE / OS junk.
+.idea/
+*.iml
+.DS_Store
